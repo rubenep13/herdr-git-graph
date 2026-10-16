@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.run/
+e2e/artifacts/
+config.json
+*.log
+# Generated per machine by `hgg launchd-plist`.
+launchd/*.plist

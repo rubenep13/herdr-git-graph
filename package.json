@@ -1,0 +1,31 @@
+{
+  "name": "herdr-git-graph",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only web Git history viewer for the Mac, opened from Herdr through its port forwarding.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24.2"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/dev.mjs",
+    "start": "node server/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-concurrency=1 --test-timeout=120000 --test-force-exit \"test/**/*.test.ts\"",
+    "test:e2e": "node --test --test-concurrency=1 --test-timeout=180000 --test-force-exit \"e2e/**/*.e2e.ts\"",
+    "check": "npm run typecheck && npm test && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "@web-git-graph/node": "1.0.7",
+    "@web-git-graph/protocol": "1.0.7",
+    "@web-git-graph/web": "1.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.64.1",
+    "typescript": "7.0.2"
+  }
+}

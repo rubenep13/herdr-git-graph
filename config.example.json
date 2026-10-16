@@ -1,0 +1,6 @@
+{
+  "port": 3020,
+  "roots": [{ "path": "~/Devs", "depth": 3 }],
+  "repositories": [],
+  "includeLinkedWorktrees": true
+}
