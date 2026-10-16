@@ -1,11 +1,12 @@
 // hgg — runs and opens this viewer. Only ever touches its own server process.
-//   hgg [open] [--no-focus] | start | stop | restart | status | url | logs [-f] | launchd-plist
+//   hgg [open] [--no-focus] | start | stop | restart | status | url | rotate-token | logs [-f] | launchd-plist
 //   With no command it opens the viewer (the everyday use from a Herdr tab).
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { APP_NAME, PROJECT_DIR, loadConfig } from "../server/config.ts";
+import { ensureSecret, makeTicket, newSecret } from "../server/auth.ts";
 
 const RUN_DIR = join(PROJECT_DIR, ".run");
 const PID_FILE = join(RUN_DIR, "server.pid");
@@ -16,6 +17,11 @@ const SHIM = join(homedir(), ".local", "state", "herdr", "gpui", "bin", "herdr-g
 
 const config = loadConfig();
 const url = `http://localhost:${config.port}/`;
+
+/** The page URL with a one-time login ticket in the fragment (never sent to the server or a Referer). */
+function loginUrl(): string {
+  return config.auth ? `${url}#t=${makeTicket(ensureSecret(config.tokenFile))}` : url;
+}
 
 interface Health {
   app: string;
@@ -166,10 +172,10 @@ async function open(args: string[]): Promise<number> {
   if (started !== 0) return started;
   const herdrGpui = existsSync(SHIM) ? SHIM : "herdr-gpui";
   if (!process.env.HERDR_WORKSPACE_ID) {
-    console.log(`not inside a Herdr pane, so Herdr cannot open it. Open ${url} yourself, or run \`hgg open\` from a Herdr tab.`);
+    console.log(`not inside a Herdr pane, so Herdr cannot open it. Open this one-time link yourself (valid 2 minutes):\n${loginUrl()}`);
     return 0;
   }
-  const result = spawnSync(herdrGpui, ["browser", "open", ...args.filter((arg) => arg === "--no-focus"), url], { stdio: "inherit" });
+  const result = spawnSync(herdrGpui, ["browser", "open", ...args.filter((arg) => arg === "--no-focus"), loginUrl()], { stdio: "inherit" });
   if (result.error) {
     console.error(`could not run ${herdrGpui}: ${result.error.message}. Open ${url} through Herdr's "Forward port…" instead.`);
     return 1;
@@ -237,8 +243,16 @@ switch (command) {
     code = await open(args);
     break;
   case "url":
-    console.log(url);
+    // A one-time link, valid for two minutes: for opening the viewer in another browser.
+    console.log(loginUrl());
     break;
+  case "rotate-token": {
+    // A new secret ends every browser session; the running server picks it up by itself.
+    ensureSecret(config.tokenFile);
+    writeFileSync(config.tokenFile, `${newSecret()}\n`, { mode: 0o600 });
+    console.log(`new secret written to ${config.tokenFile}; every browser needs \`hgg\` again.`);
+    break;
+  }
   case "logs":
     spawnSync("tail", [args.includes("-f") ? "-f" : "-n", ...(args.includes("-f") ? [] : ["100"]), LOG_FILE], { stdio: "inherit" });
     break;
@@ -246,7 +260,7 @@ switch (command) {
     process.stdout.write(launchdPlist());
     break;
   default:
-    console.error("usage: hgg [open] [--no-focus] | start | stop | restart | status | url | logs [-f] | launchd-plist");
+    console.error("usage: hgg [open] [--no-focus] | start | stop | restart | status | url | rotate-token | logs [-f] | launchd-plist");
     code = 2;
 }
 process.exit(code);

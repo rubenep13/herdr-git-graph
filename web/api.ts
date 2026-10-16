@@ -97,10 +97,47 @@ export class ApiError extends Error {
   }
 }
 
+const SESSION_KEY = "hgg.session.v1";
+
+/**
+ * The session token, kept in localStorage: it is per origin (port included),
+ * so no other local server can read it, unlike a cookie for localhost.
+ */
+export const session = {
+  get(): string {
+    try {
+      return localStorage.getItem(SESSION_KEY) ?? "";
+    } catch {
+      return memorySession;
+    }
+  },
+  set(value: string): void {
+    memorySession = value;
+    try {
+      localStorage.setItem(SESSION_KEY, value);
+    } catch {
+      // Private mode: the session lasts as long as this page.
+    }
+  },
+  clear(): void {
+    memorySession = "";
+    try {
+      localStorage.removeItem(SESSION_KEY);
+    } catch {
+      // Nothing stored.
+    }
+  }
+};
+let memorySession = "";
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
+  const token = session.get();
   try {
-    response = await fetch(path, { ...init, headers: { accept: "application/json", ...(init.headers ?? {}) } });
+    response = await fetch(path, {
+      ...init,
+      headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) }
+    });
   } catch (error) {
     if ((error as Error).name === "AbortError") throw error;
     throw new ApiError("No se puede contactar con el servidor del visor.", 0, "network", true);
@@ -121,6 +158,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const repoPath = (id: string) => `/v1/repositories/${encodeURIComponent(id)}`;
 const apiRepoPath = (id: string) => `/api/repos/${encodeURIComponent(id)}`;
+
+/** Trades the one-time ticket `hgg` put in the URL fragment for a session token. */
+export async function redeemTicket(ticket: string): Promise<void> {
+  const result = await request<{ session: string }>("/api/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ticket })
+  });
+  session.set(result.session);
+}
 
 export const api = {
   repos: (rescan = false, signal?: AbortSignal) =>
@@ -155,5 +202,6 @@ export const api = {
     ),
   search: (id: string, q: string, signal?: AbortSignal) =>
     request<SearchResponse>(`${apiRepoPath(id)}/search?${new URLSearchParams({ q, limit: "200" })}`, signal ? { signal } : {}),
-  eventsUrl: (id: string) => `${apiRepoPath(id)}/events`
+  // EventSource cannot send headers, so the change stream alone takes the session as a parameter.
+  eventsUrl: (id: string) => `${apiRepoPath(id)}/events?${new URLSearchParams({ s: session.get() })}`
 };

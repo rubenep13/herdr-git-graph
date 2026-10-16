@@ -96,12 +96,12 @@ describe("the server never writes to the repositories it shows", () => {
     const refsBefore = fixture.git(demo.alpha, ["for-each-ref", "--format=%(refname) %(objectname)"]);
     const headBefore = fixture.git(demo.alpha, ["rev-parse", "HEAD"]);
     const get = async <T>(path: string): Promise<T> => {
-      const response = await raw(server.port, path);
+      const response = await raw(server.port, path, { headers: server.auth });
       assert.equal(response.status, 200, `${path}: ${response.body.slice(0, 200)}`);
       return response.json<T>();
     };
     const post = async <T>(path: string, body: unknown): Promise<T> => {
-      const response = await raw(server.port, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const response = await raw(server.port, path, { method: "POST", headers: { "content-type": "application/json", ...server.auth }, body: JSON.stringify(body) });
       assert.equal(response.status, 200, `${path}: ${response.body.slice(0, 200)}`);
       return response.json<T>();
     };
@@ -140,7 +140,7 @@ describe("the server never writes to the repositories it shows", () => {
     await get(`/api/repos/${id}/search?q=change`);
     await get(`/api/repos/${id}/search?q=grace`);
     // The change stream runs the watcher's status checks while open.
-    const events = await raw(server.port, `/api/repos/${id}/events`, { timeoutMs: 2_500 }).catch(() => undefined);
+    const events = await raw(server.port, `/api/repos/${id}/events?s=${server.session}`, { timeoutMs: 2_500 }).catch(() => undefined);
     void events;
 
     assert.deepEqual(diffSnapshots(repoBefore, snapshot(demo.alpha)), []);

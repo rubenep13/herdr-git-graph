@@ -4,6 +4,7 @@ import { extname, join, normalize, sep } from "node:path";
 import { createGitGraphNodeHandler } from "@web-git-graph/node";
 import { GitGraphProtocolError, type GitGraphErrorCode } from "@web-git-graph/protocol";
 import { APP_NAME, type AppConfig } from "./config.ts";
+import type { TokenStore } from "./auth.ts";
 import type { ViewerBackend } from "./backend.ts";
 import type { GitRunner } from "./git.ts";
 import type { RepoEntry, RepoRegistry } from "./registry.ts";
@@ -19,6 +20,8 @@ export interface AppContext {
   staticDir: string;
   version: string;
   watchHub?: WatchHub;
+  /** When set, the API needs a session (Authorization: Bearer); see auth.ts. */
+  tokens?: TokenStore;
   /** Heartbeat of the change stream, in milliseconds. */
   heartbeatMs?: number;
 }
@@ -26,11 +29,13 @@ export interface AppContext {
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
- * Every route the server answers. All of them only read; the two POST routes
+ * Every route the server answers. None writes to a repository: POST
+ * /api/session trades a login ticket for a session, and the two POST routes
  * of @web-git-graph/node compute a comparison or a patch from a JSON body.
  */
 export const ROUTES = [
   "GET /api/health",
+  "POST /api/session",
   "GET /api/repos",
   "GET /api/repos/:id/info",
   "GET /api/repos/:id/worktree",
@@ -128,6 +133,7 @@ export function checkRequest(request: IncomingMessage, pathname: string): void {
 export function checkMethod(method: string, pathname: string): void {
   if (method === "GET" || method === "HEAD") return;
   if (method === "POST" && /^\/v1\/repositories\/[^/]+\/(compare|diff)$/.test(pathname)) return;
+  if (method === "POST" && pathname === "/api/session") return;
   throw new HttpError(405, "method_not_allowed", "This viewer is read-only.");
 }
 
@@ -175,6 +181,32 @@ function publicEntry(entry: RepoEntry) {
     ...(entry.mainId ? { mainId: entry.mainId } : {}),
     ...(entry.branch ? { branch: entry.branch } : {})
   };
+}
+
+/** Routes reachable without a session: liveness (used by `hgg`) and the ticket exchange. */
+const PUBLIC_API = new Set(["/api/health", "/api/session"]);
+
+/**
+ * The session token of a request: the Authorization header, or — only for the
+ * change stream, which EventSource cannot send headers for — the `s` parameter.
+ */
+function sessionOf(request: IncomingMessage, url: URL): string | undefined {
+  const header = request.headers.authorization;
+  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
+  if (/^\/api\/repos\/[^/]+\/events$/.test(url.pathname)) return url.searchParams.get("s") ?? undefined;
+  return undefined;
+}
+
+async function readSmallBody(request: IncomingMessage, maxBytes: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) throw new HttpError(413, "too_large", "Request body is too large.");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /** Aborts when the client goes away, so a cancelled search stops its Git process. */
@@ -272,6 +304,11 @@ export function createApp(context: AppContext): AppHandler {
       pathname = url.pathname;
       checkRequest(request, pathname);
       checkMethod(method, pathname);
+      const api = pathname.startsWith("/api/") || pathname.startsWith("/v1/");
+      if (context.tokens && api && !PUBLIC_API.has(pathname) && !context.tokens.verifySession(sessionOf(request, url))) {
+        response.setHeader("www-authenticate", 'Bearer realm="herdr-git-graph"');
+        throw new HttpError(401, "unauthorized", "Sesión no válida: abre el visor con `hgg` en el Mac.");
+      }
 
       if (pathname.startsWith("/v1/")) {
         for (const [key, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(key, value);
@@ -281,6 +318,22 @@ export function createApp(context: AppContext): AppHandler {
 
       if (pathname === "/api/health") {
         sendJson(response, { app: APP_NAME, version: context.version, pid: process.pid, port: context.config.port, startedAt });
+        return;
+      }
+      if (pathname === "/api/session") {
+        if (!context.tokens) {
+          sendJson(response, { session: "" });
+          return;
+        }
+        let ticket = "";
+        try {
+          ticket = String((JSON.parse(await readSmallBody(request, 2_048)) as { ticket?: unknown }).ticket ?? "");
+        } catch (error) {
+          if (error instanceof HttpError) throw error;
+        }
+        const session = context.tokens.redeem(ticket);
+        if (!session) throw new HttpError(401, "invalid_ticket", "El enlace de acceso no es válido o ya caducó: vuelve a ejecutar `hgg` en el Mac.");
+        sendJson(response, { session });
         return;
       }
       if (pathname === "/api/repos") {

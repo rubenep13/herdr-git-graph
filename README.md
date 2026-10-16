@@ -32,7 +32,9 @@ hgg            # = hgg open: arranca si hace falta y pide a Herdr que lo abra
 | --- | --- |
 | `hgg` / `hgg open [--no-focus]` | Arranca el servidor (si no corre) y ejecuta `herdr-gpui browser open http://localhost:3020/` |
 | `hgg start` / `stop` / `restart` | Gestiona solo esta instancia (PID verificado; nunca arranca dos) |
-| `hgg status` / `url` / `logs [-f]` | Estado, URL y log (`.run/server.log`) |
+| `hgg status` / `logs [-f]` | Estado y log (`.run/server.log`) |
+| `hgg url` | Enlace de acceso de un solo uso (2 min), para abrir el visor en otro navegador |
+| `hgg rotate-token` | Cambia el secreto: cierra todas las sesiones de navegador (sin reiniciar) |
 | `hgg launchd-plist` | Imprime un LaunchAgent para arrancarlo con la sesión (no lo instala) |
 
 Aspecto calcado de la vista de GitKraken: filas teñidas por carril, burbujas de autor (iniciales, sin
@@ -71,6 +73,22 @@ Requiere Node ≥ 24.2 (ejecuta TypeScript directamente) y git.
 - Los worktrees enlazados se descubren con `git worktree list` de un repositorio permitido,
   aunque estén fuera de las raíces (p. ej. `~/.herdr/worktrees/...`).
 - Una petición nunca nombra una ruta: solo ids del registro. `host` solo admite loopback.
+
+## Acceso con token
+
+Escuchar solo en loopback no basta: cualquier proceso local, o una extensión del navegador de
+Omarchy a través del reenvío de Herdr, podría leer `127.0.0.1:3020`. Por eso la API exige sesión:
+
+- El secreto vive en `.run/token` (permisos `0600`, fuera de Git) y no sale del Mac.
+- `hgg` firma con él un billete de un solo uso (válido 2 minutos) y abre
+  `http://localhost:3020/#t=<billete>`. Al ir en el fragmento `#`, no llega al servidor en la URL
+  ni en el `Referer`; una vez usado no sirve de nada aunque quede en el historial.
+- La página lo canjea (`POST /api/session`) por un token de sesión que guarda en `localStorage`
+  (aislado por origen y puerto; una cookie de `localhost` la recibiría cualquier otro servidor
+  local) y lo envía como `Authorization: Bearer`. Sin sesión, la página explica cómo entrar.
+- Sin sesión solo responden `/api/health` (estado, sin datos de repos) y los ficheros de la página.
+- La sesión sobrevive a reinicios del servidor; `hgg rotate-token` las invalida todas.
+- `config.json` admite `"auth": false` para desactivarlo (no recomendado).
 
 ## Solo lectura
 

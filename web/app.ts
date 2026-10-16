@@ -1,5 +1,5 @@
 import type { GitGraphCommit, GitGraphPage, GitGraphRef } from "@web-git-graph/protocol";
-import { api, ApiError, type InfoResponse, type RepoState, type RepoSummary, type SearchResult, type WorktreeStatus } from "./api.ts";
+import { api, ApiError, redeemTicket, session, type InfoResponse, type RepoState, type RepoSummary, type SearchResult, type WorktreeStatus } from "./api.ts";
 import { DetailsPanel } from "./details.ts";
 import { formatDate, h, prefs, shortOid, svg } from "./dom.ts";
 import { GraphView } from "./graph-view.ts";
@@ -133,6 +133,20 @@ export class App {
   }
 
   async start(): Promise<void> {
+    // `hgg` opens /#t=<one-time ticket>; trade it for a session and drop it from the address bar.
+    const ticket = /^#t=([A-Za-z0-9._-]+)/.exec(location.hash)?.[1];
+    if (ticket) {
+      history.replaceState(null, "", location.pathname);
+      try {
+        await redeemTicket(ticket);
+      } catch (error) {
+        if (!session.get()) {
+          this.#showError(error);
+          return;
+        }
+        // An old or reused link, but this browser already has a session: carry on.
+      }
+    }
     this.#showState("Cargando repositorios…");
     try {
       await this.#loadRepos(false);
@@ -192,6 +206,7 @@ export class App {
 
   async openRepo(id: string): Promise<void> {
     const generation = ++this.#generation;
+    this.#picker.close();
     this.#events?.close();
     this.#events = undefined;
     this.#setLive("off");
@@ -377,9 +392,20 @@ export class App {
       if (this.#data) this.#data.state = change.state;
       void this.reload({ history: change.refs, worktree: change.worktree || change.refs });
     });
+    let lastCheck = 0;
     source.addEventListener("error", () => {
       if (generation !== this.#generation) return;
       this.#setLive("retrying");
+      // A stream refused for lack of a session would retry forever; find out once in a while.
+      if (Date.now() - lastCheck < 10_000) return;
+      lastCheck = Date.now();
+      api.info(id).catch((error: unknown) => {
+        if (generation !== this.#generation || !(error instanceof ApiError) || error.code !== "unauthorized") return;
+        source.close();
+        this.#setLive("off");
+        session.clear();
+        this.#showBanner(error);
+      });
     });
   }
 
@@ -792,12 +818,16 @@ export class App {
         return "No se puede contactar con el servidor del visor. Si el túnel de Herdr se cerró o el servidor se detuvo, ejecuta `hgg open` en una pestaña del Mac en Herdr y recarga.";
       }
       if (error.code === "repository_not_found") return "Repositorio no disponible: se movió, se borró o ya no está en las raíces configuradas.";
+      if (error.code === "unauthorized" || error.code === "invalid_ticket") {
+        return "Este navegador no tiene acceso al visor. Ábrelo con `hgg` en una pestaña del Mac en Herdr (o usa el enlace de un solo uso que imprime `hgg url`).";
+      }
       return error.message;
     }
     return "Error inesperado.";
   }
 
   #showError(error: unknown): void {
+    if (error instanceof ApiError && error.code === "unauthorized") session.clear();
     const retry = h("button", { class: "btn", type: "button" }, "Reintentar");
     retry.addEventListener("click", () => {
       if (this.#data) void this.openRepo(this.#data.id);

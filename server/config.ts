@@ -26,6 +26,10 @@ export interface AppConfig {
   /** Upper bound of directories visited per scan, across all roots. */
   maxScanEntries: number;
   pageSize: number;
+  /** Require a session for the API (see auth.ts). */
+  auth: boolean;
+  /** The secret the sessions are derived from (0600, never leaves this machine). */
+  tokenFile: string;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -47,7 +51,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     "Applications"
   ],
   maxScanEntries: 4000,
-  pageSize: 300
+  pageSize: 300,
+  auth: true,
+  tokenFile: join(PROJECT_DIR, ".run", "token")
 };
 
 export function expandHome(path: string, home = homedir()): string {
@@ -88,6 +94,9 @@ export function normalizeConfig(input: Partial<AppConfig>, baseDir = PROJECT_DIR
   config.repositories = config.repositories.map((path) => absolute(path));
   config.pageSize = Math.min(500, Math.max(50, Math.trunc(config.pageSize)));
   config.maxScanEntries = Math.max(1, Math.trunc(config.maxScanEntries));
+  if (typeof config.auth !== "boolean") fail("auth must be true or false.");
+  if (typeof config.tokenFile !== "string" || !config.tokenFile) fail("tokenFile must be a path.");
+  config.tokenFile = absolute(config.tokenFile);
   return config;
 }
 

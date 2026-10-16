@@ -1,5 +1,8 @@
 import { request as httpRequest } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ensureSecret, makeTicket, sessionFor } from "../../server/auth.ts";
 import { normalizeConfig, PROJECT_DIR, type AppConfig } from "../../server/config.ts";
 import { startServer, type StartedServer } from "../../server/main.ts";
 
@@ -45,12 +48,34 @@ export function raw(
 export interface TestServer extends StartedServer {
   port: number;
   config: AppConfig;
+  /** The session token of this server's secret. */
+  session: string;
+  /** `Authorization` header carrying that session. */
+  auth: Record<string, string>;
+  /** A fresh one-time login ticket, as `hgg` makes. */
+  ticket(now?: number): string;
 }
 
+/** Starts a server with its own secret in a temporary folder — never the real `.run/token`. */
 export async function startTestServer(config: Partial<AppConfig>): Promise<TestServer> {
-  const normalized = normalizeConfig({ port: 3999, ...config });
+  const secretDir = mkdtempSync(join(tmpdir(), "hgg-secret-"));
+  const tokenFile = join(secretDir, "token");
+  const normalized = normalizeConfig({ port: 3999, tokenFile, ...config });
   const started = await startServer(normalized, { port: 0, staticDir: join(PROJECT_DIR, "dist", "public") });
   const address = started.server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  return { ...started, port, config: normalized };
+  const secret = () => ensureSecret(normalized.tokenFile);
+  const session = normalized.auth ? sessionFor(secret()) : "";
+  return {
+    ...started,
+    port,
+    config: normalized,
+    session,
+    auth: session ? { authorization: `Bearer ${session}` } : {},
+    ticket: (now?: number) => makeTicket(secret(), now),
+    close: async () => {
+      await started.close();
+      rmSync(secretDir, { recursive: true, force: true });
+    }
+  };
 }

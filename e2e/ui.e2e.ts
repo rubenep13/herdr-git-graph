@@ -35,7 +35,7 @@ describe("the viewer in a browser", () => {
     mkdirSync(ARTIFACTS, { recursive: true });
     demo = createDemoRepos(fixture);
     server = await startTestServer({ roots: [{ path: fixture.root, depth: 2 }] });
-    const repos = (await (await fetch(`http://127.0.0.1:${server.port}/api/repos`)).json()) as { repositories: Array<{ id: string; name: string }> };
+    const repos = (await (await fetch(`http://127.0.0.1:${server.port}/api/repos`, { headers: server.auth })).json()) as { repositories: Array<{ id: string; name: string }> };
     alphaId = repos.repositories.find((repo) => repo.name === "alpha")!.id;
     browser = await launch();
     page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
@@ -44,6 +44,10 @@ describe("the viewer in a browser", () => {
     page.on("console", (message) => {
       if (message.type() === "error") problems.push(`console: ${message.text()}`);
     });
+    // The real login: `hgg` opens /#t=<one-time ticket>; the page trades it for a session.
+    await page.goto(`http://127.0.0.1:${server.port}/#t=${server.ticket()}`);
+    await page.waitForFunction(() => Boolean(localStorage.getItem("hgg.session.v1")));
+    assert.equal(new URL(page.url()).hash, "", "the ticket is removed from the address bar");
     await page.goto(`http://127.0.0.1:${server.port}/#/repo/${alphaId}`);
     await page.waitForSelector(".row[data-row='3']");
   });
@@ -200,6 +204,20 @@ describe("the viewer in a browser", () => {
     await page.locator(".col-gear").click();
     for (const label of ["Autor", "Fecha", "SHA"]) await page.locator(".col-menu-item", { hasText: label }).locator("input").uncheck();
     await page.waitForFunction(() => !document.querySelector(".row .cell.hash"));
+  });
+
+  it("a browser without a session, or with a used ticket, is told how to get access", async () => {
+    const context = await browser.newContext();
+    const stranger = await context.newPage();
+    await stranger.goto(`http://127.0.0.1:${server.port}/`);
+    await stranger.waitForFunction(() => /no tiene acceso/.test(document.querySelector(".state-overlay")?.textContent ?? ""));
+    const used = server.ticket();
+    await fetch(`http://127.0.0.1:${server.port}/api/session`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket: used }) });
+    await stranger.goto(`http://127.0.0.1:${server.port}/#t=${used}`);
+    await stranger.reload();
+    await stranger.waitForFunction(() => /no tiene acceso|no es válido/.test(document.querySelector(".state-overlay")?.textContent ?? ""));
+    assert.equal(await stranger.evaluate(() => localStorage.getItem("hgg.session.v1")), null);
+    await context.close();
   });
 
   it("only ever talks to its own server, without errors", async () => {

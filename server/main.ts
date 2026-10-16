@@ -7,6 +7,7 @@ import { GitRunner } from "./git.ts";
 import { RepoRegistry } from "./registry.ts";
 import { ViewerBackend } from "./backend.ts";
 import { createApp } from "./http.ts";
+import { TokenStore } from "./auth.ts";
 
 export interface StartedServer {
   server: Server;
@@ -26,7 +27,8 @@ export async function startServer(config: AppConfig, options: { staticDir?: stri
     backend,
     git,
     version,
-    staticDir: options.staticDir ?? join(PROJECT_DIR, "dist", "public")
+    staticDir: options.staticDir ?? join(PROJECT_DIR, "dist", "public"),
+    ...(config.auth ? { tokens: new TokenStore(config.tokenFile) } : {})
   });
   const server = createServer((request, response) => void handler(request, response));
   server.keepAliveTimeout = 30_000;
@@ -62,6 +64,7 @@ async function main(): Promise<void> {
     const started = await startServer(config);
     console.log(`${APP_NAME} listening on ${started.url} (pid ${process.pid})`);
     console.log(`roots: ${config.roots.map((root) => `${root.path} (depth ${root.depth})`).join(", ")}`);
+    console.log(config.auth ? `API access: session required (secret in ${config.tokenFile})` : "API access: open (auth disabled in config)");
     const stop = (signal: string) => {
       console.log(`${signal}: stopping`);
       void started.close().then(() => process.exit(0));
